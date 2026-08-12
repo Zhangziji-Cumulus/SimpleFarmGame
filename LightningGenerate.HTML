@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>修复‑随机间隔随机参数像素闪电电弧生成器</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box;font-family:system-ui}
+        body{background:#0a0a12;display:flex;flex-direction:column;align-items:center;padding:16px;color:#fff}
+        canvas{border:2px solid #333;background:#000;image-rendering:pixelated;image-rendering:crisp-edges;}
+        .control{margin-top:12px;display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+        label{display:flex;gap:6px;align-items:center}
+        button{padding:8px 16px;background:#2589ff;border:none;color:#fff;border-radius:4px;cursor:pointer}
+        .value-text{width:55px}
+    </style>
+</head>
+<body>
+    <h2>随机参数·随机间隔自动播放 像素闪电电弧生成器</h2>
+    <canvas id="canvas" width="800" height="500"></canvas>
+    <div class="control">
+        <label>拐点分段:<input type="range" id="power" min="6" max="22" value="14"><span class="value-text" id="powerVal">14</span></label>
+        <label>分支:<input type="range" id="branch" min="0" max="6" value="3"><span class="value-text" id="branchVal">3</span></label>
+        <label>弯折强度:<input type="range" id="jitter" min="8" max="60" value="32"><span class="value-text" id="jitterVal">32</span></label>
+        <label>概率衰减:<input type="range" id="decay" min="0.1" max="0.9" step="0.05" value="0.5"><span class="value-text" id="decayVal">0.50</span></label>
+        <label>像素尺寸:<input type="range" id="pixel" min="1" max="8" value="3"><span class="value-text" id="pixelVal">3</span></label>
+        <label>最短间隔(ms):<input type="range" id="minWait" min="100" max="10000" step="100" value="100"><span class="value-text" id="minVal">100</span></label>
+        <label>最长间隔(ms):<input type="range" id="maxWait" min="100" max="10000" step="100" value="4500"><span class="value-text" id="maxVal">4500</span></label>
+        <label>开启闪电延时消失:<input type="range" id="fadeSwitch" min="0" max="1" value="1"><span class="value-text" id="fadeVal">开启</span></label>
+        <button id="btnSpawn">生成闪电(随机参数)</button>
+        <button id="btnAuto">开启自动循环</button>
+    </div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+//滑块对象
+const powerSlider = document.getElementById("power");
+const branchSlider = document.getElementById("branch");
+const jitterSlider = document.getElementById("jitter");
+const decaySlider = document.getElementById("decay");
+const pixelSlider = document.getElementById("pixel");
+const minWaitSlider = document.getElementById("minWait");
+const maxWaitSlider = document.getElementById("maxWait");
+const fadeSwitch = document.getElementById("fadeSwitch");
+const autoBtn = document.getElementById("btnAuto");
+
+//数值显示文本
+const powerVal = document.getElementById("powerVal");
+const branchVal = document.getElementById("branchVal");
+const jitterVal = document.getElementById("jitterVal");
+const decayVal = document.getElementById("decayVal");
+const pixelVal = document.getElementById("pixelVal");
+const minVal = document.getElementById("minVal");
+const maxVal = document.getElementById("maxVal");
+const fadeVal = document.getElementById("fadeVal");
+
+let autoPlay = false;
+let timerId = null;
+let clearTimer = null;
+
+//参数取值范围
+const range = {
+    powerMin:6, powerMax:22,
+    branchMin:0, branchMax:6,
+    jitterMin:8, jitterMax:60,
+    decayMin:0.1, decayMax:0.9,
+    pixelMin:1, pixelMax:8,
+    disappearMin:100,
+    disappearMax:500
+};
+
+//同步滑块文字显示
+function syncSliderText(){
+    powerVal.innerText = powerSlider.value;
+    branchVal.innerText = branchSlider.value;
+    jitterVal.innerText = jitterSlider.value;
+    decayVal.innerText = Number(decaySlider.value).toFixed(2);
+    pixelVal.innerText = pixelSlider.value;
+    minVal.innerText = minWaitSlider.value;
+    maxVal.innerText = maxWaitSlider.value;
+    fadeVal.innerText = Number(fadeSwitch.value)===1 ? "开启":"关闭";
+}
+//滑块拖动实时更新数值文本
+[powerSlider,branchSlider,jitterSlider,decaySlider,pixelSlider,minWaitSlider,maxWaitSlider,fadeSwitch].forEach(slider=>{
+    slider.addEventListener("input",syncSliderText);
+})
+
+//全部滑块赋予随机数值
+function randomAllSliders(){
+    powerSlider.value = range.powerMin + Math.floor(Math.random()*(range.powerMax-range.powerMin+1));
+    branchSlider.value = range.branchMin + Math.floor(Math.random()*(range.branchMax-range.branchMin+1));
+    jitterSlider.value = range.jitterMin + Math.floor(Math.random()*(range.jitterMax-range.jitterMin+1));
+    decaySlider.value = (range.decayMin + Math.floor(Math.random()*((range.decayMax-range.decayMin)/0.05))*0.05).toFixed(2);
+    pixelSlider.value = range.pixelMin + Math.floor(Math.random()*(range.pixelMax-range.pixelMin+1));
+    syncSliderText();
+}
+
+function getConfig(){
+    return{
+        power:Number(powerSlider.value),
+        branchMax:Number(branchSlider.value),
+        jitter:Number(jitterSlider.value),
+        decay:Number(decaySlider.value),
+        pixel:Number(pixelSlider.value)
+    }
+}
+
+function drawPixel(x,y,size){
+    ctx.fillRect(Math.floor(x),Math.floor(y),size,size);
+}
+
+function linePixels(p0,p1,size){
+    let x0 = Math.floor(p0.x);
+    let y0 = Math.floor(p0.y);
+    let x1 = Math.floor(p1.x);
+    let y1 = Math.floor(p1.y);
+
+    const dx = Math.abs(x1-x0);
+    const dy = Math.abs(y1-y0);
+    const sx = x0<x1 ? 1 : -1;
+    const sy = y0<y1 ? 1 : -1;
+    let err = dx - dy;
+
+    while(true){
+        drawPixel(x0,y0,size);
+        if(x0===x1&&y0===y1)break;
+        let e2 = err*2;
+        if(e2 > -dy){err -= dy;x0 += sx}
+        if(e2 < dx){err += dx;y0 += sy}
+    }
+}
+
+function createLightning(sx,sy,ex,ey,cfg){
+    let points = [{x:sx,y:sy}];
+    const segCount = cfg.power;
+    const baseDx = (ex - sx);
+    const baseDy = (ey - sy);
+    let lastOffsetSign = 1;
+    let bendProbability = 1.0;
+
+    for(let i = 1;i <= segCount; i++)
+    {
+        let t = i / segCount;
+        let baseX = sx + baseDx * t;
+        let baseY = sy + baseDy * t;
+        let len = Math.hypot(baseDx,baseDy);
+
+        let px = baseX;
+        let py = baseY;
+
+        if(Math.random() < bendProbability && len > 0)
+        {
+            let perpX = -baseDy / len;
+            let perpY = baseDx / len;
+            lastOffsetSign *= -1;
+            let offsetMag = (Math.random() * cfg.jitter) * lastOffsetSign;
+            px = baseX + perpX * offsetMag;
+            py = baseY + perpY * offsetMag * 0.35;
+        }
+
+        points.push({x: px, y: py});
+        bendProbability *= cfg.decay;
+    }
+
+    drawBolt(points,cfg);
+
+    const branchNum = Math.floor(Math.random() * cfg.branchMax);
+    for(let b=0;b<branchNum;b++){
+        const randIdx = 2 + Math.floor(Math.random()*(points.length-4));
+        const sp = points[randIdx];
+        const targetX = sp.x + (Math.random()-0.5)*180;
+        const targetY = sp.y + Math.random()*160;
+        createLightning(sp.x,sp.y,targetX,targetY,{
+            ...cfg,
+            power:Math.max(3,cfg.power-4),
+            jitter:cfg.jitter*0.7,
+            branchMax:0
+        })
+    }
+}
+
+function drawBolt(points,cfg){
+    const total = points.length - 1;
+    for(let i=0;i<points.length-1;i++){
+        let t = i / total;
+        let mainSize  = cfg.pixel * (1 - t * 0.88);
+        let glow2Size = cfg.pixel*2.6 * (1 - t * 0.88);
+        let glow3Size = cfg.pixel*4.2 * (1 - t * 0.88);
+
+        ctx.fillStyle="#1b58ff";
+        linePixels(points[i],points[i+1],Math.max(1,glow3Size));
+
+        ctx.fillStyle="#55ccff";
+        linePixels(points[i],points[i+1],Math.max(1,glow2Size));
+
+        ctx.fillStyle="#ffffff";
+        linePixels(points[i],points[i+1],Math.max(1,mainSize));
+    }
+}
+
+function spawnOne(){
+    randomAllSliders();
+    //清除旧的清空定时器，防止画布提前消失
+    clearTimeout(clearTimer);
+    ctx.fillStyle="#000";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    const startX = canvas.width/2;
+    const startY = 20;
+    const endX = Math.random()*canvas.width;
+    const endY = canvas.height-20;
+    createLightning(startX,startY,endX,endY,getConfig())
+
+    //开启延时消失，随机100‑500ms之后清空画布
+    if(Number(fadeSwitch.value)===1){
+        let delay = range.disappearMin + Math.random()*(range.disappearMax-range.disappearMin);
+        clearTimer = setTimeout(()=>{
+            ctx.fillStyle="#000";
+            ctx.fillRect(0,0,canvas.width,canvas.height);
+        },delay);
+    }
+}
+
+//修复版定时调度
+function runAutoLoop(){
+    if(!autoPlay) return;
+    let minT = Number(minWaitSlider.value);
+    let maxT = Number(maxWaitSlider.value);
+    //防止最小值大于最大值
+    if(minT>maxT) minT = maxT;
+    const randomDelay = minT + Math.random() * (maxT - minT);
+    timerId = setTimeout(function(){
+        spawnOne();
+        runAutoLoop();
+    },randomDelay);
+}
+
+//画布点击
+canvas.onclick = e=>{
+    spawnOne();
+}
+
+document.getElementById("btnSpawn").onclick = spawnOne;
+
+//自动循环开关（先清空定时器，杜绝堆积失效）
+autoBtn.onclick = ()=>{
+    autoPlay = !autoPlay;
+    clearTimeout(timerId);
+    if(autoPlay){
+        autoBtn.innerText = "关闭自动循环";
+        runAutoLoop();
+    }else{
+        autoBtn.innerText = "开启自动循环";
+    }
+}
+
+syncSliderText();
+</script>
+</body>
+</html>

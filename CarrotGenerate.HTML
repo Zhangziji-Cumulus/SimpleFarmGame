@@ -63,6 +63,7 @@
     <label>四周留白 <input id="paddingGrid" type="number" value="20"></label>
     <label>叶子数量 <input id="leaf" type="number" value="5"></label>
     <label>叶片最大长度 <input id="leafMaxH" type="number" value="10"></label>
+    <label>茎秆长度 <input id="stemLen" type="number" value="6"></label>
     <label>下垂强度 <input id="sagPower" type="number" value="1"></label>
     <button onclick="randomizeCarrot()">随机</button>
     <button onclick="renderCarrot()">重新生成</button>
@@ -224,6 +225,7 @@ function randomizeCarrot() {
     set("paddingGrid", 10, 30);
     set("leaf", 3, 8);
     set("leafMaxH", 6, 18);
+    set("stemLen", 3, 10);
     set("sagPower", 0, 3);
 
     renderCarrot();
@@ -236,14 +238,17 @@ function renderCarrot() {
     const paddingGrid = Number(document.getElementById("paddingGrid").value);
     const leafCount = Number(document.getElementById("leaf").value);
     const leafMaxHeight = Number(document.getElementById("leafMaxH").value);
+    const stemLen = Number(document.getElementById("stemLen").value);
     const sagPower = Number(document.getElementById("sagPower").value);
 
     const topStartFactor = randFloat(0.3, 0.6);
 
     const carrotGridW = (maxHalf * 2) + 1;
 
+    const stemReserve = Math.max(2, Math.round(stemLen));
+
     const gridW = carrotGridW + paddingGrid * 2;
-    const gridH = carrotGridH + paddingGrid * 2 + leafMaxHeight;
+    const gridH = carrotGridH + paddingGrid * 2 + leafMaxHeight + stemReserve;
 
     canvas.width = gridW * px;
     canvas.height = gridH * px;
@@ -257,7 +262,8 @@ function renderCarrot() {
     }
 
     const centerX = Math.floor(gridW / 2);
-    const carrotTopY = paddingGrid + leafMaxHeight;
+    const stemTopY = paddingGrid + leafMaxHeight;
+    const carrotTopY = stemTopY + stemReserve;
     const bottomY = carrotTopY + carrotGridH - 1;
 
     let carrotBorder = [];
@@ -359,8 +365,18 @@ function renderCarrot() {
         }
     }
 
+    // ---- 茎秆 (stem): 萝卜主体 -> 茎 -> 叶子，层次分明 ----
+    const stemHalf = Math.max(2, Math.round(maxHalf * 0.22));
+    for (let y = stemTopY; y < carrotTopY; y++) {
+        for (let x = centerX - stemHalf; x <= centerX + stemHalf; x++) {
+            const stemColor = rand(0, 3) < 1 ? colors.leafDark : colors.leafMain;
+            safeSetGrid(grid, x, y, gridW, gridH, stemColor);
+            bodyMask.add(`${x},${y}`);
+        }
+    }
+
     const leafOriginX = centerX;
-    const leafOriginY = carrotTopY - 1;
+    const leafOriginY = stemTopY;
     const leafBaseSpread = Math.max(3, Math.floor(maxHalf * 0.75));
 
     const angleStep = Math.PI / (leafCount + 1);
