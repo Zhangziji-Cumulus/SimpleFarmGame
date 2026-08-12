@@ -64,6 +64,7 @@
     <label>叶子数量 <input id="leaf" type="number" value="5"></label>
     <label>叶片最大长度 <input id="leafMaxH" type="number" value="10"></label>
     <label>下垂强度 <input id="sagPower" type="number" value="1"></label>
+    <button onclick="randomizeCarrot()">随机</button>
     <button onclick="renderCarrot()">重新生成</button>
     <button onclick="saveImage()">下载素材PNG</button>
 </div>
@@ -210,6 +211,22 @@ function removeExternalIsolatedPixels(grid, gridW, gridH, bodyMask) {
         const [x, y] = key.split(",").map(Number);
         grid[y][x] = null;
     });
+}
+
+function randomizeCarrot() {
+    const set = (id, min, max) => {
+        document.getElementById(id).value = rand(min, max);
+    };
+
+    set("pxSize", 4, 10);
+    set("carrotMaxHalf", 12, 30);
+    set("carrotGridH", 35, 70);
+    set("paddingGrid", 10, 30);
+    set("leaf", 3, 8);
+    set("leafMaxH", 6, 18);
+    set("sagPower", 0, 3);
+
+    renderCarrot();
 }
 
 function renderCarrot() {
