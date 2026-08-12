@@ -1,0 +1,37 @@
+# 编译文件
+*.o
+*.obj
+*.exe
+*.com
+*.class
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.dylib
+*.lib
+*.dll
+*.exp
+*.ilk
+*.pdb
+*.idb
+*.obj
+*.stc
+*.stp
+
+# 构建输出
+dist/
+build/
+out/
+target/
+*.egg-info/
+*.egg
+.next/
+.nuxt/
+.output/
+*.generated.*
+*.bundle.js
+*.chunk.js
+coverage/
+.coverage
+htmlcov/
