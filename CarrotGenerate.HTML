@@ -65,6 +65,7 @@
     <label>叶片最大长度 <input id="leafMaxH" type="number" value="10"></label>
     <label>茎秆长度 <input id="stemLen" type="number" value="6"></label>
     <label>下垂强度 <input id="sagPower" type="number" value="1"></label>
+    <label><input id="lightning" type="checkbox" onchange="if(this.checked){startLightning();}else{stopLightning();}"> 闪电特效</label>
     <button onclick="randomizeCarrot()">随机</button>
     <button onclick="renderCarrot()">重新生成</button>
     <button onclick="saveImage()">下载素材PNG</button>
@@ -78,6 +79,12 @@ const ctx = canvas.getContext("2d");
 
 const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 const randFloat = (min, max) => Math.random() * (max - min) + min;
+
+// 模块级状态：用于动画重绘与“闪电在胡萝卜背后”的图层分离
+let carrotGrid = null, carrotGW = 0, carrotGH = 0, carrotPX = 6;
+let carrotCXpx = 0, carrotCYpx = 0, carrotRpx = 0;
+let lightningAnimId = null;
+let flashState = { bolts: null, cycleEnd: 0, visibleEnd: 0 };
 
 function shuffle(arr) {
     for (let i = arr.length - 1; i > 0; i--) {
@@ -500,14 +507,212 @@ function renderCarrot() {
 
     removeExternalIsolatedPixels(grid, gridW, gridH, bodyMask);
 
-    for (let y = 0; y < gridH; y++) {
-        for (let x = 0; x < gridW; x++) {
-            if (grid[y][x]) {
-                ctx.fillStyle = grid[y][x];
+    // 保存网格与几何，供重绘 / 动画使用
+    carrotGrid = grid;
+    carrotGW = gridW;
+    carrotGH = gridH;
+    carrotPX = px;
+    carrotCXpx = centerX * px;
+    carrotCYpx = ((carrotTopY + bottomY) / 2) * px;
+    carrotRpx = maxHalf * px;
+
+    if (document.getElementById("lightning").checked) {
+        startLightning();
+    } else {
+        stopLightning();
+    }
+}
+
+// ===== 闪电特效模块（移植自 LightningGenerate.HTML，金黄色）=====
+function linePixels(p0, p1, size) {
+    let x0 = Math.floor(p0.x);
+    let y0 = Math.floor(p0.y);
+    let x1 = Math.floor(p1.x);
+    let y1 = Math.floor(p1.y);
+    const dx = Math.abs(x1 - x0);
+    const dy = Math.abs(y1 - y0);
+    const sx = x0 < x1 ? 1 : -1;
+    const sy = y0 < y1 ? 1 : -1;
+    let err = dx - dy;
+    while (true) {
+        ctx.fillRect(x0, y0, size, size);
+        if (x0 === x1 && y0 === y1) break;
+        let e2 = err * 2;
+        if (e2 > -dy) { err -= dy; x0 += sx; }
+        if (e2 < dx) { err += dx; y0 += sy; }
+    }
+}
+
+function createLightningPoints(sx, sy, ex, ey, cfg) {
+    let points = [{ x: sx, y: sy }];
+    const segCount = cfg.power;
+    const baseDx = ex - sx;
+    const baseDy = ey - sy;
+    let lastOffsetSign = 1;
+    let bendProbability = 1.0;
+
+    for (let i = 1; i <= segCount; i++) {
+        let t = i / segCount;
+        let baseX = sx + baseDx * t;
+        let baseY = sy + baseDy * t;
+        let len = Math.hypot(baseDx, baseDy);
+        let px = baseX;
+        let py = baseY;
+
+        if (Math.random() < bendProbability && len > 0) {
+            let perpX = -baseDy / len;
+            let perpY = baseDx / len;
+            lastOffsetSign *= -1;
+            let offsetMag = (Math.random() * cfg.jitter) * lastOffsetSign;
+            px = baseX + perpX * offsetMag;
+            py = baseY + perpY * offsetMag * 0.35;
+        }
+        points.push({ x: px, y: py });
+        bendProbability *= cfg.decay;
+    }
+
+    const branchNum = Math.floor(Math.random() * cfg.branchMax);
+    for (let b = 0; b < branchNum; b++) {
+        const randIdx = 2 + Math.floor(Math.random() * Math.max(1, points.length - 4));
+        const sp = points[randIdx];
+        const branchPts = createLightningPoints(sp.x, sp.y,
+            sp.x + (Math.random() - 0.5) * cfg.branchReachX,
+            sp.y + Math.random() * cfg.branchReachY,
+            { ...cfg, power: Math.max(3, cfg.power - 4), jitter: cfg.jitter * 0.7, branchMax: 0 });
+        points.push(...branchPts);
+    }
+    return points;
+}
+
+function drawBolt(points, cfg, alpha) {
+    const total = points.length - 1;
+    ctx.globalAlpha = alpha;
+    const outer = "#cc9900";
+    const mid = "#ffcc22";
+    const inner = "#ffffff";
+    for (let i = 0; i < points.length - 1; i++) {
+        let t = i / total;
+        let core = cfg.pixel * (1 - t * 0.88);
+        let glow2 = cfg.pixel * 1.9 * (1 - t * 0.88);
+        let glow3 = cfg.pixel * 3.1 * (1 - t * 0.88);
+        ctx.fillStyle = outer; linePixels(points[i], points[i + 1], Math.max(1, glow3));
+        ctx.fillStyle = mid;   linePixels(points[i], points[i + 1], Math.max(1, glow2));
+        ctx.fillStyle = inner; linePixels(points[i], points[i + 1], Math.max(1, core));
+    }
+    ctx.globalAlpha = 1;
+}
+
+function pickBoltCount(maxN) {
+    let weights = [];
+    let sum = 0;
+    for (let i = 1; i <= maxN; i++) {
+        let w = 1 / Math.pow(3, i - 1);
+        weights.push(w);
+        sum += w;
+    }
+    let rnd = Math.random() * sum;
+    let acc = 0;
+    for (let idx = 0; idx < weights.length; idx++) {
+        acc += weights[idx];
+        if (rnd <= acc) return idx + 1;
+    }
+    return 1;
+}
+
+// ===== 动态 360° 金色闪电（绘制在胡萝卜背后，并持续随机生成）=====
+
+// 仅把胡萝卜像素画到画布（不清理），用于闪电之上的覆盖层
+function paintCarrot() {
+    const px = carrotPX;
+    for (let y = 0; y < carrotGH; y++) {
+        for (let x = 0; x < carrotGW; x++) {
+            if (carrotGrid[y][x]) {
+                ctx.fillStyle = carrotGrid[y][x];
                 ctx.fillRect(x * px, y * px, px, px);
             }
         }
     }
+}
+
+// 生成一帧的 360° 随机闪电：一部分从胡萝卜背后向四周放射，一部分全画布自由随机
+function makeLightningFrame(px) {
+    const W = canvas.width, H = canvas.height;
+    const k = px / 3;
+    const cx = carrotCXpx, cy = carrotCYpx, R = carrotRpx;
+    const boltNum = pickBoltCount(6);
+    const bolts = [];
+
+    for (let i = 0; i < boltNum; i++) {
+        const cfg = {
+            power: rand(8, 20),
+            branchMax: rand(1, 5),
+            jitter: rand(6, 40) * k,
+            decay: randFloat(0.2, 0.85),
+            pixel: Math.max(2, Math.round(px * 0.6)),
+            branchReachX: 160 * k,
+            branchReachY: 140 * k
+        };
+
+        let sx, sy, ex, ey;
+        if (Math.random() < 0.6) {
+            // 胡萝卜背后 360° 放射状电柱：随机角度、随机起点半径、向外发散
+            const a = randFloat(0, Math.PI * 2);
+            const r0 = R * randFloat(0.35, 1.1);
+            sx = cx + Math.cos(a) * r0;
+            sy = cy + Math.sin(a) * r0;
+            const dir = a + randFloat(-0.5, 0.5);
+            const len = R * randFloat(0.4, 1.7);
+            ex = sx + Math.cos(dir) * len;
+            ey = sy + Math.sin(dir) * len;
+        } else {
+            // 自由随机（含画布外进入）
+            sx = rand(0, W);
+            sy = rand(Math.floor(-H * 0.1), Math.floor(H * 0.5));
+            ex = rand(0, W);
+            ey = rand(Math.floor(H * 0.3), Math.floor(H * 1.05));
+        }
+
+        bolts.push({ pts: createLightningPoints(sx, sy, ex, ey, cfg), cfg });
+    }
+    return bolts;
+}
+
+function drawBolts(bolts) {
+    for (const b of bolts) drawBolt(b.pts, b.cfg, 0.95);
+}
+
+// 启动持续动态闪电；每 100~1200ms 触发一批新闪电（闪现后短暂隐没），营造不断放电的 360° 光环
+function startLightning() {
+    if (lightningAnimId) return;
+
+    const loop = (now) => {
+        lightningAnimId = requestAnimationFrame(loop);
+
+        if (now >= flashState.cycleEnd) {
+            // 触发新一批：随机间隔 100~1200ms 后再触发
+            const cycle = rand(100, 1200);
+            flashState.bolts = makeLightningFrame(carrotPX);
+            flashState.cycleEnd = now + cycle;
+            // 本批可见时长：不超过周期的 60%，且封顶 220ms，形成闪烁感
+            flashState.visibleEnd = now + Math.min(cycle * 0.6, rand(60, 220));
+        }
+
+        // 先画闪电（在背后），再画胡萝卜覆盖 -> 闪电位于胡萝卜后面
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (flashState.bolts && now < flashState.visibleEnd) drawBolts(flashState.bolts);
+        paintCarrot();
+    };
+    loop(performance.now());
+}
+
+// 停止动画并回到干净的胡萝卜（无闪电）
+function stopLightning() {
+    if (lightningAnimId) {
+        cancelAnimationFrame(lightningAnimId);
+        lightningAnimId = null;
+    }
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (carrotGrid) paintCarrot();
 }
 
 function saveImage() {
