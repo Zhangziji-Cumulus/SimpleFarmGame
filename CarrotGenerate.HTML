@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>像素胡萝卜 - 最小可运行版</title>
+<style>
+    * {
+        box-sizing: border-box;
+        font-family: system-ui;
+    }
+
+    body {
+        padding: 24px;
+        background: #222;
+        color: #fff;
+    }
+
+    #canvas {
+        image-rendering: pixelated;
+        image-rendering: crisp-edges;
+        border: 3px solid orange;
+        background: #333;
+    }
+
+    .ctrl {
+        margin: 12px 0;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+
+    button {
+        padding: 8px 14px;
+        border: none;
+        border-radius: 6px;
+        background: #ff7800;
+        color: #fff;
+        font-weight: bold;
+        cursor: pointer;
+    }
+
+    input {
+        width: 120px;
+        padding: 6px;
+    }
+
+    label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+</style>
+</head>
+
+<body>
+<h2>像素胡萝卜 2D 素材生成器</h2>
+
+<div class="ctrl">
+    <label>像素尺寸 <input id="pxSize" type="number" value="6"></label>
+    <label>胡萝卜最大半宽 <input id="carrotMaxHalf" type="number" value="20"></label>
+    <label>胡萝卜网格高度 <input id="carrotGridH" type="number" value="50"></label>
+    <label>四周留白 <input id="paddingGrid" type="number" value="20"></label>
+    <label>叶子数量 <input id="leaf" type="number" value="5"></label>
+    <label>叶片最大长度 <input id="leafMaxH" type="number" value="10"></label>
+    <label>下垂强度 <input id="sagPower" type="number" value="1"></label>
+    <button onclick="renderCarrot()">重新生成</button>
+    <button onclick="saveImage()">下载素材PNG</button>
+</div>
+
+<canvas id="canvas"></canvas>
+
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+const randFloat = (min, max) => Math.random() * (max - min) + min;
+
+function shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = rand(0, i);
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+}
+
+const colors = {
+    skinLight: "#ff9933",
+    skinMain: "#ff7822",
+    skinDark: "#e04f18",
+    skinDeep: "#b83e10",
+    tipDark: "#8f2f0a",
+    root: "#7a3c20",
+    rootTip: "#5a2a14",
+    leafMain: "#33aa22",
+    leafDark: "#1e7712",
+    outline: "#000000"
+};
+
+function safeSetGrid(grid, gx, gy, gridW, gridH, color) {
+    if (gy >= 0 && gy < gridH && gx >= 0 && gx < gridW) {
+        grid[gy][gx] = color;
+    }
+}
+
+function getHalfWidth(y, carrotTopY, carrotGridH, maxHalf, topStartFactor) {
+    const bottomY = carrotTopY + carrotGridH - 1;
+
+    const shoulderEnd = carrotTopY + Math.floor(carrotGridH * 0.12);
+    if (y <= shoulderEnd) {
+        const t = (y - carrotTopY) / Math.max(1, shoulderEnd - carrotTopY);
+        const topHalf = maxHalf * topStartFactor + t * maxHalf * (1 - topStartFactor);
+        return Math.max(3, Math.round(topHalf));
+    }
+
+    const midEnd = carrotTopY + Math.floor(carrotGridH * 0.45);
+    if (y <= midEnd) {
+        const t = (y - shoulderEnd) / Math.max(1, midEnd - shoulderEnd);
+        const midHalf = maxHalf - t * maxHalf * 0.10;
+        return Math.max(3, Math.round(midHalf));
+    }
+
+    const taperEnd = carrotTopY + Math.floor(carrotGridH * 0.88);
+    if (y <= taperEnd) {
+        const t = (y - midEnd) / Math.max(1, taperEnd - midEnd);
+        const lowerHalf = maxHalf * 0.90 - t * maxHalf * 0.35;
+        return Math.max(3, Math.round(lowerHalf));
+    }
+
+    const t = (y - taperEnd) / Math.max(1, bottomY - taperEnd);
+    const tipHalf = maxHalf * 0.55 - t * maxHalf * 0.50;
+    return Math.max(2, Math.round(tipHalf));
+}
+
+function getBentPoint(rootX, rootY, baseAngle, dist, leafLen, sag) {
+    let gravityFactor = Math.sin(baseAngle);
+    if (gravityFactor < 0) gravityFactor = 0;
+
+    let t = dist / Math.max(1, leafLen);
+    let bendProgress = t * t;
+    let maxOffset = sag * bendProgress * gravityFactor;
+
+    let baseX = rootX + dist * Math.cos(baseAngle);
+    let baseY = rootY - dist * Math.sin(baseAngle);
+
+    let horizontalBias = 0;
+    if (baseAngle < Math.PI / 2) {
+        horizontalBias = maxOffset * Math.abs(Math.cos(baseAngle));
+    } else if (baseAngle > Math.PI / 2) {
+        horizontalBias = -maxOffset * Math.abs(Math.cos(baseAngle));
+    }
+
+    let verticalBias = maxOffset;
+
+    return {
+        x: Math.round(baseX + horizontalBias),
+        y: Math.round(baseY + verticalBias)
+    };
+}
+
+function pickCarrotColor(yRatio, edgeFactor, noise) {
+    let val = yRatio + noise * 0.12;
+
+    if (val < 0.22) {
+        return edgeFactor > 0.82 ? colors.skinDark : colors.skinLight;
+    } else if (val < 0.58) {
+        if (edgeFactor > 0.86) return colors.skinDeep;
+        if (edgeFactor > 0.72) return colors.skinDark;
+        return rand(0, 9) < 6 ? colors.skinMain : colors.skinLight;
+    } else if (val < 0.86) {
+        if (edgeFactor > 0.84) return colors.skinDeep;
+        if (edgeFactor > 0.68) return colors.skinDark;
+        return rand(0, 9) < 5 ? colors.skinMain : colors.skinDark;
+    } else {
+        return edgeFactor > 0.78 ? colors.tipDark : colors.skinDark;
+    }
+}
+
+function removeExternalIsolatedPixels(grid, gridW, gridH, bodyMask) {
+    const neighbors = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]];
+    const remove = new Set();
+
+    for (let y = 0; y < gridH; y++) {
+        for (let x = 0; x < gridW; x++) {
+            if (!grid[y][x]) continue;
+
+            const key = `${x},${y}`;
+            if (bodyMask.has(key)) continue;
+
+            let sameColorCount = 0;
+
+            for (let [dx, dy] of neighbors) {
+                const nx = x + dx;
+                const ny = y + dy;
+                if (nx >= 0 && nx < gridW && ny >= 0 && ny < gridH) {
+                    if (grid[ny][nx] === grid[y][x]) {
+                        sameColorCount++;
+                    }
+                }
+            }
+
+            if (sameColorCount === 0) {
+                remove.add(key);
+            }
+        }
+    }
+
+    remove.forEach(key => {
+        const [x, y] = key.split(",").map(Number);
+        grid[y][x] = null;
+    });
+}
+
+function renderCarrot() {
+    const px = Number(document.getElementById("pxSize").value);
+    const maxHalf = Number(document.getElementById("carrotMaxHalf").value);
+    const carrotGridH = Number(document.getElementById("carrotGridH").value);
+    const paddingGrid = Number(document.getElementById("paddingGrid").value);
+    const leafCount = Number(document.getElementById("leaf").value);
+    const leafMaxHeight = Number(document.getElementById("leafMaxH").value);
+    const sagPower = Number(document.getElementById("sagPower").value);
+
+    const topStartFactor = randFloat(0.3, 0.6);
+
+    const carrotGridW = (maxHalf * 2) + 1;
+
+    const gridW = carrotGridW + paddingGrid * 2;
+    const gridH = carrotGridH + paddingGrid * 2 + leafMaxHeight;
+
+    canvas.width = gridW * px;
+    canvas.height = gridH * px;
+
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    let grid = [];
+    for (let y = 0; y < gridH; y++) {
+        grid[y] = new Array(gridW).fill(null);
+    }
+
+    const centerX = Math.floor(gridW / 2);
+    const carrotTopY = paddingGrid + leafMaxHeight;
+    const bottomY = carrotTopY + carrotGridH - 1;
+
+    let carrotBorder = [];
+    let bodyMask = new Set();
+
+    for (let y = carrotTopY; y <= bottomY; y++) {
+        let half = getHalfWidth(y, carrotTopY, carrotGridH, maxHalf, topStartFactor);
+        let left = centerX - half;
+        let right = centerX + half;
+
+        carrotBorder[y] = { left, right, half };
+
+        let yRatio = (y - carrotTopY) / Math.max(1, carrotGridH);
+
+        for (let x = left; x <= right; x++) {
+            let localX = x - centerX;
+            let edge = Math.abs(localX) / Math.max(1, half);
+            let noise = rand(-3, 3);
+            let color = pickCarrotColor(yRatio, edge, noise);
+
+            safeSetGrid(grid, x, y, gridW, gridH, color);
+            bodyMask.add(`${x},${y}`);
+        }
+
+        safeSetGrid(grid, left, y, gridW, gridH, colors.outline);
+        safeSetGrid(grid, right, y, gridW, gridH, colors.outline);
+        bodyMask.add(`${left},${y}`);
+        bodyMask.add(`${right},${y}`);
+    }
+
+    const ridgeCount = rand(5, 8);
+    for (let r = 0; r < ridgeCount; r++) {
+        let startX = centerX + rand(-maxHalf + 4, maxHalf - 4);
+        let drift = rand(-2, 2);
+        let posY = carrotTopY + rand(6, 12);
+
+        while (posY < bottomY - 6) {
+            posY += rand(3, 6);
+            startX += drift;
+
+            const b = carrotBorder[posY];
+            if (!b) break;
+
+            if (startX > centerX - 3 && startX < centerX + 3) continue;
+
+            if (startX >= b.left && startX <= b.right) {
+                safeSetGrid(grid, startX, posY, gridW, gridH, colors.skinDark);
+                bodyMask.add(`${startX},${posY}`);
+
+                if (rand(0, 4) < 1) {
+                    safeSetGrid(grid, startX + 1, posY, gridW, gridH, colors.skinDeep);
+                    bodyMask.add(`${startX + 1},${posY}`);
+                }
+            }
+        }
+    }
+
+    for (let s = 0; s < rand(8, 16); s++) {
+        let sy = rand(carrotTopY + 10, bottomY - 8);
+        const b = carrotBorder[sy];
+        let sx = rand(b.left + 2, b.right - 2);
+
+        safeSetGrid(grid, sx, sy, gridW, gridH, colors.skinDark);
+        bodyMask.add(`${sx},${sy}`);
+
+        if (rand(0, 2) < 1) {
+            safeSetGrid(grid, sx + 1, sy, gridW, gridH, colors.skinDeep);
+            bodyMask.add(`${sx + 1},${sy}`);
+
+            safeSetGrid(grid, sx, sy + 1, gridW, gridH, colors.skinDeep);
+            bodyMask.add(`${sx},${sy + 1}`);
+        }
+    }
+
+    const mainRootCount = rand(3, 5);
+    for (let i = 0; i < mainRootCount; i++) {
+        let rx = rand(centerX - 3, centerX + 3);
+
+        safeSetGrid(grid, rx, bottomY, gridW, gridH, colors.root);
+        bodyMask.add(`${rx},${bottomY}`);
+
+        safeSetGrid(grid, rx, bottomY + 1, gridW, gridH, colors.root);
+        bodyMask.add(`${rx},${bottomY + 1}`);
+
+        if (rand(0, 1)) {
+            safeSetGrid(grid, rx + 1, bottomY + 1, gridW, gridH, colors.root);
+            bodyMask.add(`${rx + 1},${bottomY + 1}`);
+        }
+    }
+
+    const fineRootCount = rand(4, 7);
+    for (let i = 0; i < fineRootCount; i++) {
+        let rx = rand(centerX - 6, centerX + 6);
+        let len = rand(1, 3);
+
+        for (let j = 0; j < len; j++) {
+            safeSetGrid(grid, rx, bottomY + j, gridW, gridH, colors.rootTip);
+            bodyMask.add(`${rx},${bottomY + j}`);
+        }
+    }
+
+    const leafOriginX = centerX;
+    const leafOriginY = carrotTopY - 1;
+    const leafBaseSpread = Math.max(3, Math.floor(maxHalf * 0.75));
+
+    const angleStep = Math.PI / (leafCount + 1);
+    const leafData = [];
+
+    for (let i = 0; i < leafCount; i++) {
+        let baseAngle = (i + 1) * angleStep;
+        let angle = baseAngle + (rand(-10, 10) * Math.PI / 180);
+        let leafLen = rand(Math.floor(leafMaxHeight * 0.6), leafMaxHeight);
+
+        const perspectiveScale = 0.75 + Math.abs(Math.cos(angle)) * 0.25;
+        const actualLen = Math.round(leafLen * perspectiveScale);
+
+        leafData.push({ angle, length: actualLen, baseAngle });
+    }
+
+    shuffle(leafData);
+
+    leafData.forEach(leaf => {
+        const { angle, length: leafLen } = leaf;
+        let leafPixels = [];
+
+        for (let dist = 0; dist <= leafLen; dist++) {
+            let point = getBentPoint(leafOriginX, leafOriginY, angle, dist, leafLen, sagPower);
+            let { x: baseX, y: ny } = point;
+
+            if (ny < 0 || ny >= gridH) continue;
+
+            let leafW;
+            if (dist < leafBaseSpread) {
+                leafW = Math.max(2, Math.floor(leafBaseSpread / 2));
+            } else if (dist < leafLen * 0.75) {
+                leafW = Math.floor(1 + dist / 3.5);
+            } else {
+                leafW = Math.max(1, Math.floor(1 + (leafLen - dist) / 2.5));
+            }
+
+            const widthScale = 0.65 + Math.abs(Math.cos(angle)) * 0.35;
+            leafW = Math.max(1, Math.round(leafW * widthScale));
+
+            for (let dw = -leafW; dw <= leafW; dw++) {
+                let pxPos = baseX + dw;
+                let leafColor = rand(0, 1) ? colors.leafMain : colors.leafDark;
+
+                safeSetGrid(grid, pxPos, ny, gridW, gridH, leafColor);
+                leafPixels.push({ x: pxPos, y: ny });
+                bodyMask.add(`${pxPos},${ny}`);
+            }
+
+            safeSetGrid(grid, baseX, ny, gridW, gridH, colors.outline);
+            bodyMask.add(`${baseX},${ny}`);
+
+            if (leafW > 1) {
+                safeSetGrid(grid, baseX - leafW, ny, gridW, gridH, colors.outline);
+                bodyMask.add(`${baseX - leafW},${ny}`);
+
+                safeSetGrid(grid, baseX + leafW, ny, gridW, gridH, colors.outline);
+                bodyMask.add(`${baseX + leafW},${ny}`);
+            }
+
+            if (Math.abs(Math.cos(angle)) < 0.45 && leafW > 2) {
+                safeSetGrid(grid, baseX - 1, ny, gridW, gridH, colors.outline);
+                bodyMask.add(`${baseX - 1},${ny}`);
+
+                safeSetGrid(grid, baseX + 1, ny, gridW, gridH, colors.outline);
+                bodyMask.add(`${baseX + 1},${ny}`);
+            }
+
+            if (dist > 2 && dist < leafLen - 2 && rand(0, 5) < 2) {
+                let subBent = getBentPoint(leafOriginX, leafOriginY, angle, dist, leafLen, sagPower);
+                let subRootX = subBent.x;
+                let subRootY = subBent.y;
+                let subAngle = angle + (rand(25, 45) * Math.PI / 180) * (rand(0, 1) ? 1 : -1);
+                let subLen = rand(3, 6);
+
+                for (let d2 = 1; d2 <= subLen; d2++) {
+                    let subPt = getBentPoint(subRootX, subRootY, subAngle, d2, subLen, sagPower * 0.6);
+
+                    if (subPt.y < 0 || subPt.y >= gridH) continue;
+
+                    let sw = Math.floor(1 + d2 / 4);
+
+                    for (let ds = -sw; ds <= sw; ds++) {
+                        let sp = subPt.x + ds;
+                        let leafColor = rand(0, 1) ? colors.leafMain : colors.leafDark;
+
+                        safeSetGrid(grid, sp, subPt.y, gridW, gridH, leafColor);
+                        leafPixels.push({ x: sp, y: subPt.y });
+                        bodyMask.add(`${sp},${subPt.y}`);
+                    }
+
+                    if (sw > 1) {
+                        safeSetGrid(grid, subPt.x - sw, subPt.y, gridW, gridH, colors.outline);
+                        bodyMask.add(`${subPt.x - sw},${subPt.y}`);
+
+                        safeSetGrid(grid, subPt.x + sw, subPt.y, gridW, gridH, colors.outline);
+                        bodyMask.add(`${subPt.x + sw},${subPt.y}`);
+                    }
+
+                    safeSetGrid(grid, subPt.x, subPt.y, gridW, gridH, colors.outline);
+                    bodyMask.add(`${subPt.x},${subPt.y}`);
+                }
+            }
+        }
+
+        const leafSet = new Set(leafPixels.map(p => `${p.x},${p.y}`));
+        const neighbors = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]];
+
+        for (let p of leafPixels) {
+            for (let [dx, dy] of neighbors) {
+                let nx = p.x + dx;
+                let ny = p.y + dy;
+
+                if (nx >= 0 && nx < gridW && ny >= 0 && ny < gridH && !leafSet.has(`${nx},${ny}`)) {
+                    safeSetGrid(grid, nx, ny, gridW, gridH, colors.outline);
+                    bodyMask.add(`${nx},${ny}`);
+                }
+            }
+        }
+    });
+
+    removeExternalIsolatedPixels(grid, gridW, gridH, bodyMask);
+
+    for (let y = 0; y < gridH; y++) {
+        for (let x = 0; x < gridW; x++) {
+            if (grid[y][x]) {
+                ctx.fillStyle = grid[y][x];
+                ctx.fillRect(x * px, y * px, px, px);
+            }
+        }
+    }
+}
+
+function saveImage() {
+    const link = document.createElement("a");
+    link.download = "realistic-carrot-pixel.png";
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+}
+
+window.onload = renderCarrot;
+</script>
+</body>
+</html>
